@@ -1,0 +1,39 @@
+{
+  "name": "@imenam/mcp-gui-interface",
+  "version": "1.0.0",
+  "description": "Shared library for MCP GUI lifecycle management — spawning, IPC, proxy registration, logging",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "release": "npm version patch && npm run build && npm publish --access public && git push origin master --follow-tags"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gui",
+    "ipc",
+    "lifecycle",
+    "proxy",
+    "ai",
+    "agent"
+  ],
+  "author": "Matthieu Pesnot-Pin",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "typescript": "^5.9.3"
+  }
+}
