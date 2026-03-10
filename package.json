@@ -30,6 +30,10 @@
     "ai",
     "agent"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Matthieu-Pesnot-Pin/mcp-gui-interface.git"
+  },
   "author": "Matthieu Pesnot-Pin",
   "license": "ISC",
   "devDependencies": {
