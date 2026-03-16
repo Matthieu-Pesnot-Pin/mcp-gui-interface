@@ -16,7 +16,7 @@ export class ProxyClient {
     return this.status;
   }
 
-  async register(options: RegisterOptions, fallbackPort: number): Promise<RegisterResult> {
+  async register(options: RegisterOptions): Promise<RegisterResult> {
     this.registeredPath = options.path;
 
     return new Promise((resolve) => {
@@ -26,7 +26,7 @@ export class ProxyClient {
       } catch {
         logger.error(`Invalid Proxy URL: ${this.proxyUrl}`);
         this.status = "error";
-        return resolve({ success: false, port: fallbackPort, error: "Invalid Proxy URL" });
+        return resolve({ success: false, port: 0, error: "Invalid Proxy URL" });
       }
 
       const timeout = 1000;
@@ -59,18 +59,18 @@ export class ProxyClient {
                   resolve({ success: true, port: raw.port, url: raw.url });
                 } else {
                   logger.error(`Invalid proxy response schema: ${data}`);
-                  this.status = "fallback";
-                  resolve({ success: false, port: fallbackPort, error: "Invalid proxy response schema" });
+                  this.status = "error";
+                  resolve({ success: false, port: 0, error: "Invalid proxy response schema" });
                 }
               } catch {
                 logger.error(`JSON parse error: ${data}`);
-                this.status = "fallback";
-                resolve({ success: false, port: fallbackPort, error: "Invalid JSON response" });
+                this.status = "error";
+                resolve({ success: false, port: 0, error: "Invalid JSON response" });
               }
             } else {
               logger.error(`Registration rejected with HTTP ${res.statusCode}`);
-              this.status = "fallback";
-              resolve({ success: false, port: fallbackPort, error: `HTTP ${res.statusCode}` });
+              this.status = "error";
+              resolve({ success: false, port: 0, error: `HTTP ${res.statusCode}` });
             }
           });
         }
@@ -78,15 +78,15 @@ export class ProxyClient {
 
       req.on("error", (err) => {
         logger.error(`Registration error: ${err.message}`);
-        this.status = "fallback";
-        resolve({ success: false, port: fallbackPort, error: err.message });
+        this.status = "error";
+        resolve({ success: false, port: 0, error: err.message });
       });
 
       req.on("timeout", () => {
         logger.error(`Registration timeout after ${timeout}ms`);
         req.destroy();
-        this.status = "fallback";
-        resolve({ success: false, port: fallbackPort, error: "Timeout" });
+        this.status = "error";
+        resolve({ success: false, port: 0, error: "Timeout" });
       });
 
       req.write(JSON.stringify(options));
