@@ -1,6 +1,6 @@
 {
   "name": "@imenam/mcp-gui-interface",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Shared library for MCP GUI lifecycle management — spawning, IPC, proxy registration, logging",
   "type": "module",
   "main": "./dist/src/index.js",
