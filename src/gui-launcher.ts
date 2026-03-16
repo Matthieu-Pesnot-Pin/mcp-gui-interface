@@ -15,7 +15,7 @@ export class GuiLauncher {
   private readonly restartDelay: number;
 
   constructor(private readonly options: GuiLauncherOptions) {
-    this.maxRestarts = options.maxRestarts ?? 3;
+    this.maxRestarts = options.maxRestarts ?? 0;
     this.restartDelay = options.restartDelay ?? 2000;
 
     this.registerSignalHandlers();
