@@ -47,7 +47,7 @@ export function setupLogging(options: SetupLoggingOptions): void {
 
   currentProcessLabel = options.processLabel;
 
-  const resolvedLogDir = options.logDir ?? path.join(process.cwd(), ".mcp-gui", "logs");
+  const resolvedLogDir = options.logDir ?? process.env.MCP_LOG_DIR ?? path.join(process.cwd(), ".mcp-gui", "logs");
 
   fs.mkdirSync(resolvedLogDir, { recursive: true });
   const logFilePath = path.join(resolvedLogDir, "server.log");

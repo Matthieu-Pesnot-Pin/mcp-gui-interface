@@ -2,7 +2,7 @@
 
 Shared library for MCP GUI lifecycle management — spawning, IPC, proxy registration, and logging.
 
-This package encapsulates the boilerplate every MCP server needs when it runs a companion GUI: spawning a child process safely, communicating with it over IPC, registering it with the central proxy, and logging without polluting stdout.
+This package encapsulates the boilerplate many MCP servers need when they run a companion GUI: spawning a child process safely, communicating over IPC, registering with the central HTTP proxy, and logging without polluting **stdout** (reserved for MCP JSON-RPC on the parent process).
 
 ---
 
@@ -12,40 +12,74 @@ This package encapsulates the boilerplate every MCP server needs when it runs a 
 npm install @imenam/mcp-gui-interface
 ```
 
-No runtime dependencies. Requires Node.js with ESM support (`"type": "module"`).
+No runtime dependencies. Requires Node.js with ESM support (`"type": "module"` in consuming packages).
+
+---
+
+## Scope: Node only
+
+This package targets **Node.js processes** (MCP master and GUI worker). It is **not** meant for browser or Vite bundles — do not add it as a dependency of a React/Vite front-end.
+
+---
+
+## How it fits together
+
+1. **MCP host** (e.g. Cursor) talks **only** to the **master** process over **stdio** (JSON-RPC). Nothing from this library runs in the host.
+2. The **master** may use **`GuiLauncher`** to **fork** a second Node process: the **GUI worker**. They talk over Node **IPC** (`process.send` / `message`).
+3. The **worker** starts an HTTP server (Express, Hono, …) and usually uses **`ProxyClient`** to register with your **HTTP proxy** so the UI gets a stable URL. It also serves the built SPA (static files).
+4. The **browser** loads that SPA. It talks to the worker via **HTTP** (`fetch`, SSE). It does **not** import this npm package—the worker is already a Node server.
+
+So: **two Node processes** (master + worker) may both depend on this package; the **browser bundle** must not.
+
+```mermaid
+flowchart LR
+  Host[MCP host]
+  Master[Master process]
+  Worker[GUI worker Node]
+  Proxy[HTTP proxy]
+  Browser[Browser]
+
+  Host <-->|stdio JSON-RPC| Master
+  Master -->|fork + IPC| Worker
+  Worker -->|register| Proxy
+  Browser -->|HTTP| Proxy
+  Proxy --> Worker
+```
+
+For a longer French walkthrough, see **MCP Documentor** → project **`mcp-gui-interface`** → *Guide d’utilisation — @imenam/mcp-gui-interface*.
 
 ---
 
 ## Why this library exists
 
-MCP servers communicate with their host (Cursor, Claude Desktop, etc.) over **stdout** using JSON-RPC. Any `console.log` or stray output on stdout will corrupt the protocol and break the connection.
+MCP servers talk to the host (Cursor, Claude Desktop, etc.) over **stdout** using JSON-RPC. Any stray `console.log` on stdout can corrupt the protocol.
 
-When an MCP server also needs to serve a GUI (typically an Express server), it must:
+When an MCP server also serves a GUI (Express, Hono, etc.), it typically must:
 
-1. Spawn the GUI as a **separate child process** so its stdout doesn't pollute the parent's JSON-RPC channel.
-2. Keep the two processes in sync via **typed IPC messages**.
-3. **Register the GUI** with a central proxy so it can be reached at a predictable URL.
-4. **Log safely** — always to stderr and/or a log file, never to stdout.
+1. **Fork** the GUI as a **separate child process** so the GUI’s stdout does not mix with the parent’s JSON-RPC channel.
+2. Exchange messages over **Node IPC** (`process.send` / `message`).
+3. **Register** the GUI with the central proxy ([mcp-http-gateway](https://github.com/Matthieu-Pesnot-Pin/mcp-http-gateway)) so it is reachable under a stable path.
+4. **Log safely** — stderr and/or a log file; never rely on stdout for logs in the master process.
 
-This library handles all four concerns.
+This library supports these patterns via `GuiLauncher`, `IpcHub`, `ProxyClient`, and `setupLogging` / `createLogger`.
 
 ---
 
-## API Reference
+## API reference
 
 ### `GuiLauncher`
 
-Spawns and supervises a GUI child process.
+Spawns and supervises a GUI child process (`fork` with `stdio: ['ignore', 'pipe', 'inherit', 'ipc']` — child stdout is piped to the parent’s stderr).
 
 ```typescript
 import { GuiLauncher } from "@imenam/mcp-gui-interface";
 
 const launcher = new GuiLauncher({
-  guiPath: "./dist/gui.js",     // Path to the GUI entry point (forked with Node)
-  env: { PORT: "3000" },        // Extra environment variables passed to the child
-  maxRestarts: 3,               // Max auto-restarts on crash (default: 3)
-  restartDelay: 2000,           // Delay in ms before restarting (default: 2000)
-  onMessage: (msg) => {         // Optional callback for incoming IPC messages
+  guiPath: "./dist/gui-worker.js",
+  env: { ...process.env } as Record<string, string>,
+  maxRestarts: 0, // default: 0 — no auto-restart unless you opt in
+  restartDelay: 2000, // default: 2000 ms between restart attempts
+  onMessage: (msg) => {
     console.error("Received:", msg);
   },
 });
@@ -53,204 +87,144 @@ const launcher = new GuiLauncher({
 launcher.start();
 ```
 
-**Options (`GuiLauncherOptions`)**
+**`GuiLauncherOptions`**
 
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `guiPath` | `string` | — | Absolute or relative path to the GUI script to fork |
-| `env` | `Record<string, string>` | `{}` | Additional env vars merged with `process.env` |
-| `maxRestarts` | `number` | `3` | Maximum number of auto-restarts after unexpected crashes |
-| `restartDelay` | `number` | `2000` | Milliseconds to wait before each restart attempt |
-| `onMessage` | `(msg: IpcMessage) => void` | — | Callback invoked when the GUI sends an IPC message |
+| Property       | Type                         | Default | Description |
+|----------------|------------------------------|---------|-------------|
+| `guiPath`      | `string`                     | —       | Path to the GUI entry script (forked with Node) |
+| `env`          | `Record<string, string>`     | —       | Extra env vars merged with `process.env` |
+| `maxRestarts`  | `number`                     | **`0`** | Auto-restarts after unexpected exit (non-zero code) |
+| `restartDelay` | `number`                     | `2000`  | Ms to wait before each restart |
+| `onMessage`    | `(msg: IpcMessage) => void`  | —       | Incoming IPC from the child |
 
 **Methods**
 
-| Method | Returns | Description |
-|---|---|---|
-| `start()` | `ChildProcess` | Spawns (or re-spawns) the GUI process |
-| `send(message)` | `boolean` | Fire-and-forget IPC message to the GUI |
-| `getIpcHub()` | `IpcHub` | Access the underlying `IpcHub` for advanced usage |
-| `getProcess()` | `ChildProcess \| null` | The current child process instance |
-| `cleanup()` | `Promise<void>` | Gracefully terminates the GUI (SIGTERM → SIGKILL after 3s) |
+| Method           | Returns              | Description |
+|------------------|----------------------|-------------|
+| `start()`        | `ChildProcess`       | Spawns or respawns the GUI |
+| `send(message)`  | `boolean`            | Sends IPC to the child (timestamp added internally) |
+| `getIpcHub()`    | `IpcHub`             | Lower-level IPC helper |
+| `getProcess()`   | `ChildProcess \| null` | Current child, if any |
+| `cleanup()`      | `Promise<void>`      | SIGTERM, then SIGKILL after 3s if needed |
 
-The launcher automatically handles `SIGINT`, `SIGTERM`, and stdin `close` events so the GUI is always cleaned up when the MCP server exits.
+The launcher registers handlers for `SIGINT`, `SIGTERM`, parent `exit`, and stdin `close` to tear down the child.
 
 ---
 
 ### `IpcHub`
 
-Typed IPC messaging between the MCP server (parent) and the GUI (child).
+Typed IPC between parent and child. Usually obtained via `launcher.getIpcHub()`.
 
 ```typescript
-import { IpcHub } from "@imenam/mcp-gui-interface";
-
-// Parent side (access via GuiLauncher.getIpcHub())
 const ipc = launcher.getIpcHub();
 
-// Fire-and-forget
-ipc.send({ type: "CONFIG_UPDATE", data: { theme: "dark" }, timestamp: new Date().toISOString() });
-
-// Request/response with correlation ID and timeout
-const response = await ipc.request({ type: "GET_STATUS" }, 3000);
-console.error(response.data);
-
-// Subscribe to all incoming messages
-ipc.onMessage((msg) => {
-  if (msg.type === "READY") console.error("GUI is ready");
+ipc.send({
+  type: "CONFIG_UPDATE",
+  data: { theme: "dark" },
+  timestamp: new Date().toISOString(),
 });
+
+const response = await ipc.request({ type: "GET_STATUS" }, 3000);
 ```
 
-**`IpcMessage` interface**
+**`IpcMessage`**
 
 ```typescript
 interface IpcMessage {
-  type: string;          // Message type identifier
-  correlationId?: string; // Auto-set by request() for matching responses
-  data?: any;            // Payload
-  error?: string;        // Error description (used in error responses)
-  timestamp: string;     // ISO 8601 timestamp
+  type: string;
+  correlationId?: string;
+  data?: any;
+  error?: string;
+  timestamp: string;
 }
 ```
 
 **Methods**
 
-| Method | Description |
-|---|---|
-| `send(message)` | Sends a typed message. Returns `false` if the process is not connected. |
-| `onMessage(callback)` | Subscribes to all incoming messages from the target process. |
-| `request(message, timeout?)` | Sends a message and waits for a response with a matching `correlationId`. Rejects on timeout (default: 2000ms) or if the process is disconnected. |
+| Method                     | Description |
+|----------------------------|-------------|
+| `send(message)`            | Returns `false` if not connected |
+| `onMessage(callback)`      | Only delivers objects with a `type` field |
+| `request(message, timeout?)` | Default timeout **2000 ms** |
 
 ---
 
 ### `ProxyClient`
 
-Registers and unregisters the GUI with the central HTTP proxy ([`mcp-http-gateway`](https://github.com/Matthieu-Pesnot-Pin/mcp-http-gateway)).
+Registers / unregisters the GUI with the proxy (`POST /proxy/register`, `DELETE /proxy/unregister`).
+
+**Current API (source / recent releases):**
 
 ```typescript
 import { ProxyClient } from "@imenam/mcp-gui-interface";
 
-const proxy = new ProxyClient("http://localhost:4242");
+const proxy = new ProxyClient(process.env.PROXY_URL!);
 
-// Register — proxy allocates a port and returns it
-const result = await proxy.register(
-  { path: "/my-app", name: "my-app" },
-  fallbackPort  // Used if proxy is unreachable
-);
+const result = await proxy.register({ path: "/my-app", name: "My App" });
 
 if (result.success) {
-  console.error(`GUI available at port ${result.port}`);
+  console.error(`Listening on port ${result.port}`, result.url);
 } else {
-  console.error(`Running on fallback port ${fallbackPort}`);
+  console.error(result.error, result.port); // port is 0 on failure
 }
 
-// Check current status
-proxy.getStatus(); // "connected" | "fallback" | "error"
-
-// Unregister on shutdown
 await proxy.unregister();
 ```
 
-**`RegisterOptions`**
+- Registration HTTP timeout: **1000 ms** (unregister: **2000 ms**).
+- On failure, `RegisterResult.port` is **`0`** in the current implementation.
 
-| Property | Type | Description |
-|---|---|---|
-| `path` | `string` | The URL path to register (e.g. `/my-app`) |
-| `name` | `string` | Optional display name for the app |
-| `port` | `number` | Optional preferred port |
+> **Older npm versions** may have exposed `register(options, fallbackPort)`. Check `node_modules/@imenam/mcp-gui-interface/dist/src/proxy-client.d.ts` for the exact signature you have installed.
 
-**`RegisterResult`**
-
-| Property | Type | Description |
-|---|---|---|
-| `success` | `boolean` | Whether registration succeeded |
-| `port` | `number` | Allocated port (or `fallbackPort` on failure) |
-| `url` | `string \| undefined` | Full URL returned by the proxy |
-| `error` | `string \| undefined` | Error description on failure |
-
-The proxy registration has a 1-second timeout. If the proxy is unreachable, `status` is set to `"fallback"` and the fallback port is used — the GUI still starts normally.
+**`getStatus()`:** `"connected" | "fallback" | "error"` — many failure paths set `"error"`.
 
 ---
 
 ### `setupLogging` / `createLogger`
 
-Safe logging for MCP servers, keeping stdout clean for JSON-RPC.
+Safe logging for MCP servers: protect stdout, mirror errors to a file.
 
 ```typescript
 import { setupLogging, createLogger } from "@imenam/mcp-gui-interface";
 
-// Call once at startup in the MCP server process
 setupLogging({
-  processLabel: "MY-MCP",          // Label used in log file entries
-  logDir: "./logs",                // Optional. Default: .mcp-gui/logs/
+  processLabel: "MY-MCP",
+  logDir: "./logs", // optional; overrides MCP_LOG_DIR env var and .mcp-gui/logs default
 });
 
-// Create scoped loggers anywhere in the codebase
 const logger = createLogger("MyModule");
-
 logger.info("Server started");
-logger.warn("Config missing, using defaults");
-logger.error("Failed to connect", { reason: "timeout" });
-logger.debug("Verbose detail");
 ```
 
-**What `setupLogging` does:**
-- Redirects `console.log`, `console.info`, `console.warn` → `console.error` (protecting stdout).
-- Patches `console.error` to also append every line to a rotating log file at `.mcp-gui/logs/server.log`.
-- Log entries include ISO timestamp, PID, and process label.
+**`setupLogging`**
 
-**`SetupLoggingOptions`**
+- Runs once per process (subsequent calls are no-ops).
+- Creates `logDir`, appends to **`server.log`** (single file — **no built-in rotation**).
+- Redirects `console.log` / `info` / `warn` → `console.error`.
+- Patches `console.error` to also append to the log file.
 
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `processLabel` | `string` | — | Label shown in log file lines |
-| `logDir` | `string` | `.mcp-gui/logs` | Directory where `server.log` is written |
+**Log directory resolution order:**
 
-**Log format:**
-```
-[2026-03-10T12:00:00.000Z] [PID 1234] [MY-MCP] [INFO] [MyModule] Server started
-```
+1. `logDir` option passed to `setupLogging`
+2. `MCP_LOG_DIR` environment variable
+3. `.mcp-gui/logs` relative to `process.cwd()` (default)
+
+**`createLogger(scope)`** — logs to stderr with `[LEVEL] [scope] …`.
 
 ---
 
-## Complete usage example
+## Full-stack usage sketch
 
-Here is a typical MCP server that uses all four features:
+Typical split:
 
-```typescript
-import { GuiLauncher, ProxyClient, setupLogging, createLogger } from "@imenam/mcp-gui-interface";
+1. **Master:** `setupLogging`, optional `GuiLauncher` + `start()` when `PROXY_URL` (or your policy) allows.
+2. **GUI worker:** `setupLogging`, `ProxyClient.register`, bind HTTP server to returned port, `unregister` on shutdown.
 
-// 1. Safe logging (must be called first)
-setupLogging({ processLabel: "MY-MCP" });
-const logger = createLogger("Main");
-
-// 2. Register the GUI with the proxy
-const proxy = new ProxyClient(process.env.PROXY_URL ?? "http://localhost:4242");
-const result = await proxy.register({ path: "/my-app", name: "my-app" }, 3001);
-const port = result.port;
-
-// 3. Launch the GUI child process
-const launcher = new GuiLauncher({
-  guiPath: new URL("./gui.js", import.meta.url).pathname,
-  env: { PORT: String(port) },
-  onMessage: (msg) => {
-    if (msg.type === "READY") logger.info("GUI reported ready");
-  },
-});
-
-launcher.start();
-logger.info(`GUI process started on port ${port}`);
-
-// 4. Two-way IPC: request data from the GUI
-const ipc = launcher.getIpcHub();
-const status = await ipc.request({ type: "GET_STATUS" });
-logger.info("GUI status:", status.data);
-```
+The master example in older docs that called `ProxyClient` in the same process as `GuiLauncher` is valid for simple layouts; **Hono-based** MCPs (e.g. MCP Documentor) often register the proxy **only** in the worker.
 
 ---
 
-## Type reference
-
-All public types are exported from the package root:
+## Exported types
 
 ```typescript
 import type {
@@ -269,17 +243,16 @@ import type {
 ## Development
 
 ```bash
-# Build
-npm run build
-
-# Watch mode
+npm run build        # tsc → dist/
 npm run build:watch
-
-# Release (patch bump, build, publish, push tag)
-npm run release
+npm run release      # version patch, build, publish, push tags
 ```
 
-The compiled output and type declarations are in `dist/`.
+---
+
+## Documentation interne
+
+Un **guide d’utilisation** (comment intégrer la lib dans un MCP + GUI) est maintenu dans **MCP Documentor**, projet **`mcp-gui-interface`**, entrée *Guide d’utilisation — @imenam/mcp-gui-interface* (dossier `guide`).
 
 ---
 
