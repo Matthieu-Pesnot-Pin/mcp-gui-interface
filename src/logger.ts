@@ -49,13 +49,18 @@ export function setupLogging(options: SetupLoggingOptions): void {
 
   const resolvedLogDir = options.logDir ?? process.env.MCP_LOG_DIR ?? path.join(process.cwd(), ".mcp-gui", "logs");
 
-  fs.mkdirSync(resolvedLogDir, { recursive: true });
-  const logFilePath = path.join(resolvedLogDir, "server.log");
-  logStream = fs.createWriteStream(logFilePath, { flags: "a", encoding: "utf8" });
+  try {
+    fs.mkdirSync(resolvedLogDir, { recursive: true });
+    const logFilePath = path.join(resolvedLogDir, "server.log");
+    logStream = fs.createWriteStream(logFilePath, { flags: "a", encoding: "utf8" });
 
-  logStream.on("error", (error) => {
-    originalConsoleError(`Critical: Failed to write to log file: ${serialize(error)}`);
-  });
+    logStream.on("error", (error) => {
+      logStream = null;
+      originalConsoleError(`[LOGGER] Log file write failed, disabling file logging: ${serialize(error)}`);
+    });
+  } catch (error) {
+    originalConsoleError(`[LOGGER] Could not initialize log file at "${resolvedLogDir}", disabling file logging: ${serialize(error)}`);
+  }
 
   ensureConsoleErrorPatched();
 
