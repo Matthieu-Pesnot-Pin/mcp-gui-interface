@@ -19,6 +19,16 @@ export class ProxyClient {
   async register(options: RegisterOptions): Promise<RegisterResult> {
     this.registeredPath = options.path;
 
+    // The group can be provided explicitly or, more conveniently, through the
+    // APP_GROUP env var — so any MCP using this library can opt into grouping
+    // from its .env alone. An empty/whitespace value means "ungrouped".
+    const rawGroup = options.group ?? process.env.APP_GROUP;
+    const group =
+      typeof rawGroup === "string" && rawGroup.trim() !== ""
+        ? rawGroup.trim()
+        : undefined;
+    const payload = { ...options, ...(group ? { group } : {}) };
+
     return new Promise((resolve) => {
       let url: URL;
       try {
@@ -89,7 +99,7 @@ export class ProxyClient {
         resolve({ success: false, port: 0, error: "Timeout" });
       });
 
-      req.write(JSON.stringify(options));
+      req.write(JSON.stringify(payload));
       req.end();
     });
   }

@@ -174,6 +174,21 @@ await proxy.unregister();
 - Registration HTTP timeout: **1000 ms** (unregister: **2000 ms**).
 - On failure, `RegisterResult.port` is **`0`** in the current implementation.
 
+**Grouping (`group` / `APP_GROUP`):** pass an optional `group` in the register
+options to place the app under a collapsible section (folded by default) in the
+proxy dashboard. Apps sharing the same `group` are shown together; apps without
+one land in a default "ungrouped" section. When `group` is omitted, `register`
+falls back to the **`APP_GROUP`** environment variable, so an MCP can enable
+grouping purely from its `.env` without touching code:
+
+```typescript
+// Explicit:
+await proxy.register({ path: "/my-app", name: "My App", group: "Google" });
+
+// Or, with APP_GROUP=Google in the environment, simply:
+await proxy.register({ path: "/my-app", name: "My App" });
+```
+
 > **Older npm versions** may have exposed `register(options, fallbackPort)`. Check `node_modules/@imenam/mcp-gui-interface/dist/src/proxy-client.d.ts` for the exact signature you have installed.
 
 **`getStatus()`:** `"connected" | "fallback" | "error"` — many failure paths set `"error"`.

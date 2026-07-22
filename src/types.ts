@@ -24,6 +24,16 @@ export interface RegisterOptions {
   path: string;
   name?: string;
   port?: number;
+  /**
+   * Optional visual group. The proxy dashboard places every app sharing the
+   * same `group` under one collapsible section (folded by default). Apps left
+   * without a group land in a default "ungrouped" section.
+   *
+   * When omitted, {@link ProxyClient.register} falls back to the `APP_GROUP`
+   * environment variable, so an MCP can enable grouping purely from its `.env`
+   * without touching code.
+   */
+  group?: string;
 }
 
 export interface Logger {
